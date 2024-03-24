@@ -33,7 +33,7 @@ def load_data(data_folder):
 def extract_information(client, text):
     try:
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-3.5-turbo-0125",
             response_format={"type": "json_object"},
             messages=[
                 {
@@ -47,11 +47,13 @@ def extract_information(client, text):
                 {"role": "user", "content": text},
             ],
         )
-        extracted = json.loads(response.choices[0].message.content)
+        try:
+            extracted = json.loads(response.choices[0].message.content)
+        except:
+            return None
         extracted["text"] = text
         return extracted
-    except RateLimitError as e:
-        logging.warning(f"Rate limit exceeded: {e}")
+    except:
         return None
 
 
@@ -59,7 +61,7 @@ def process_texts(texts_batch, client):
     extracted = []
     unsuccessful = []
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=25) as executor:
         futures = [
             executor.submit(extract_information, client, text["text"])
             for text in texts_batch
@@ -85,54 +87,35 @@ def process_texts(texts_batch, client):
     return extracted, unsuccessful
 
 
-def process_all_texts(texts_full, client):
-    batch_size = 20
-    total_texts = len(texts_full)
-    processed_texts = 0
-    extracted = []
-    unsuccessful = []
-
-    while texts_full:
-        batch = texts_full[:batch_size]
-        texts_full = texts_full[batch_size:]
-        batch_extracted, batch_unsuccessful = process_texts(batch, client)
-        extracted.extend(batch_extracted)
-        unsuccessful.extend(batch_unsuccessful)
-        processed_texts += len(batch_extracted)
-        logging.info(f"Processed {processed_texts} out of {
-                     total_texts} texts.")
-
-    return extracted, unsuccessful
-
-
-def remove_duplicates(data):
-    unique_data = []
-    unique_hashes = set()
-    for item in data:
-        item_tuple = tuple(sorted(item.items()))
-        if item_tuple not in unique_hashes:
-            unique_hashes.add(item_tuple)
-            unique_data.append(item)
-    return unique_data
-
-
 def main():
     setup_logging()
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     client = Client(api_key=OPENAI_API_KEY)
     data = load_data(data_folder)
     texts = [{"text": item.get("text", "")} for item in data]
-    information_extracted, unsuccessful_processes = process_all_texts(
-        texts, client)
+    batch_size = 50
+
+    processed_texts = 0
+
+    total_texts = len(texts)
+
+    output_file_path = "./facebook/extracted/20-3.json"
+
+    with open(output_file_path, "a", encoding="utf-8") as output_file:
+        while texts:
+            batch = texts[:batch_size]
+            texts = texts[batch_size:]
+            information_extracted, unsuccessful_processes = process_texts(
+                batch, client)
+            for item in information_extracted:
+                json.dump(item, output_file, ensure_ascii=False)
+                output_file.write('\n')
+            processed_texts += len(batch)
+            logging.info(f"Processed {processed_texts} out of {
+                         total_texts} texts.")
+
     logging.info("Processed all texts.")
-    logging.info(f"Data after processing: {len(information_extracted)}")
-    unique_information_extracted = remove_duplicates(information_extracted)
-    output_file_path = "./facebook/extracted/fbextracted_test.json"
-    with open(output_file_path, "w", encoding="utf-8") as output_file:
-        json.dump(
-            unique_information_extracted, output_file, indent=4, ensure_ascii=False
-        )
-    logging.info("Data saved successfully.")
+    logging.info(f"Data saved successfully.")
 
 
 if __name__ == "__main__":
